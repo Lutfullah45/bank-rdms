@@ -1,0 +1,12 @@
+CREATE OR REPLACE PROCEDURE drop_all_tables()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    DROP TABLE IF EXISTS transactions CASCADE;
+    DROP TABLE IF EXISTS transaction_types CASCADE;
+    DROP TABLE IF EXISTS credit_cards CASCADE;
+    DROP TABLE IF EXISTS account_cards CASCADE;
+    DROP TABLE IF EXISTS accounts CASCADE;
+    DROP TABLE IF EXISTS customers CASCADE;
+END;
+$$;
