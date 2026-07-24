@@ -8,7 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BankRDMS.Core\BankRDMS.Core.csproj" />
-    <ProjectReference Include="..\BankRDMS.Data\BankRDMS.Data.csproj" />
+    <ProjectReference Include="..\BankRDMS.Repository\BankRDMS.Repository.csproj" />
   </ItemGroup>
 
 </Project>

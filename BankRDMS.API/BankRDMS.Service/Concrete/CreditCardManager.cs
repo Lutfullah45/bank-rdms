@@ -1,51 +1,110 @@
-﻿using BankRDMS.Core.Entities;
-using BankRDMS.Data;
+using BankRDMS.Core.Entities;
+using BankRDMS.Core.Exceptions;
+using BankRDMS.Repository.Abstract;
 using BankRDMS.Service.Abstract;
-using Microsoft.EntityFrameworkCore;
 
-namespace BankRDMS.Service.Concrete
+namespace BankRDMS.Service.Concrete;
+
+public class CreditCardManager : ICreditCardService
 {
-    public class CreditCardManager : ICreditCardService
-    {
-        private readonly AppDbContext _context;
+    private readonly IAccountCardRepository _accountCardRepository;
+    private readonly ICreditCardRepository _creditCardRepository;
+    private readonly ICustomerRepository _customerRepository;
+    private readonly ICurrentCustomer _currentCustomer;
+    private readonly IBankingNumberGenerator _numberGenerator;
+    private readonly IUnitOfWork _unitOfWork;
 
-        public CreditCardManager(AppDbContext context)
+    public CreditCardManager(
+        IAccountCardRepository accountCardRepository,
+        ICreditCardRepository creditCardRepository,
+        ICustomerRepository customerRepository,
+        ICurrentCustomer currentCustomer,
+        IBankingNumberGenerator numberGenerator,
+        IUnitOfWork unitOfWork)
+    {
+        _accountCardRepository = accountCardRepository;
+        _creditCardRepository = creditCardRepository;
+        _customerRepository = customerRepository;
+        _currentCustomer = currentCustomer;
+        _numberGenerator = numberGenerator;
+        _unitOfWork = unitOfWork;
+    }
+
+    public async Task CreateCreditCardAsync(int customerId, decimal requestedLimit)
+    {
+        if (customerId != _currentCustomer.CustomerId)
         {
-            _context = context;
+            throw new ForbiddenException("Başka bir müşteri adına kredi kartı oluşturamazsınız.");
         }
 
-        public async Task CreateCreditCardAsync(int customerId, decimal requestedLimit)
+        if (requestedLimit <= 0)
         {
-            var random = new Random();
+            throw new DomainValidationException("Kart limiti sıfırdan büyük olmalıdır.");
+        }
 
-            string cardNumber = $"4532{random.Next(1000, 9999)}{random.Next(1000, 9999)}{random.Next(1000, 9999)}";
+        await _unitOfWork.ExecuteInTransactionAsync(async () =>
+        {
+            var customer = await _customerRepository.GetByIdForUpdateAsync(customerId);
+            if (customer is null)
+            {
+                throw new EntityNotFoundException("Müşteri bulunamadı.");
+            }
+
+            var currentTotalLimit = await _creditCardRepository.GetTotalActiveLimitAsync(customerId);
+            if (currentTotalLimit + requestedLimit > customer.RiskLimit)
+            {
+                throw new DomainValidationException(
+                    "Aktif kredi kartı limitleri toplamı müşteri risk limitini aşamaz.");
+            }
 
             var newCreditCard = new CreditCard
             {
                 CustomerId = customerId,
-                CardNumber = cardNumber,
-                CardLimit = 10000,
-                ExpirationMonthYear = DateTime.Now.AddYears(5).ToString("MM/yy"), 
-                Ccv = random.Next(100, 999).ToString(),
+                CardNumber = await GenerateUniqueCardNumberAsync(),
+                CardLimit = requestedLimit,
+                ExpirationMonthYear = DateTime.UtcNow.AddYears(5).ToString("MM/yy"),
+                Ccv = _numberGenerator.GenerateSecurityCode(),
                 IsActive = true
             };
 
-            await _context.CreditCards.AddAsync(newCreditCard);
-            await _context.SaveChangesAsync();
+            await _creditCardRepository.AddAsync(newCreditCard);
+        });
+    }
+
+    public Task<List<CreditCard>> GetAllCreditCardsAsync()
+    {
+        return _creditCardRepository.GetAllAsync(_currentCustomer.CustomerId);
+    }
+
+    public CreditCard? GetCreditCardById(int id)
+    {
+        return _creditCardRepository.GetById(id, _currentCustomer.CustomerId);
+    }
+
+    public Task<List<CreditCard>> GetCreditCardsByCustomerIdAsync(int customerId)
+    {
+        if (customerId != _currentCustomer.CustomerId)
+        {
+            throw new ForbiddenException("Başka bir müşterinin kredi kartlarını görüntüleyemezsiniz.");
         }
 
-        public async Task<List<CreditCard>> GetAllCreditCardsAsync()
+        return _creditCardRepository.GetByCustomerIdAsync(customerId);
+    }
+
+    private async Task<string> GenerateUniqueCardNumberAsync()
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
         {
-            return await _context.CreditCards.ToListAsync();
-        }
-        public CreditCard GetCreditCardById(int id)
-        {
-            return _context.CreditCards.FirstOrDefault(cc => cc.Id == id);
+            var cardNumber = _numberGenerator.GenerateCardNumber();
+            var existsAsAccountCard = await _accountCardRepository.CardNumberExistsAsync(cardNumber);
+            var existsAsCreditCard = await _creditCardRepository.CardNumberExistsAsync(cardNumber);
+
+            if (!existsAsAccountCard && !existsAsCreditCard)
+            {
+                return cardNumber;
+            }
         }
 
-        public async Task<List<CreditCard>> GetCreditCardsByCustomerIdAsync(int customerId)
-        {
-            return await _context.CreditCards.Where(c => c.CustomerId == customerId).ToListAsync();
-        }
+        throw new ConflictException("Benzersiz kart numarası üretilemedi. Lütfen tekrar deneyin.");
     }
 }

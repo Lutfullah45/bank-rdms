@@ -1,173 +1,204 @@
-﻿using BankRDMS.Core.Entities;
-using BankRDMS.Data;
+using BankRDMS.Core.Constants;
+using BankRDMS.Core.Entities;
+using BankRDMS.Core.Exceptions;
+using BankRDMS.Repository.Abstract;
 using BankRDMS.Service.Abstract;
-using Microsoft.EntityFrameworkCore;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
-namespace BankRDMS.Service.Concrete
+namespace BankRDMS.Service.Concrete;
+
+public class TransactionManager : ITransactionService
 {
-    public class TransactionManager : ITransactionService
+    private readonly IAccountRepository _accountRepository;
+    private readonly IAccountCardRepository _accountCardRepository;
+    private readonly ICreditCardRepository _creditCardRepository;
+    private readonly ICurrentCustomer _currentCustomer;
+    private readonly ITransactionRepository _transactionRepository;
+    private readonly IUnitOfWork _unitOfWork;
+
+    public TransactionManager(
+        IAccountRepository accountRepository,
+        IAccountCardRepository accountCardRepository,
+        ICreditCardRepository creditCardRepository,
+        ICurrentCustomer currentCustomer,
+        ITransactionRepository transactionRepository,
+        IUnitOfWork unitOfWork)
     {
-        private readonly AppDbContext _context;
+        _accountRepository = accountRepository;
+        _accountCardRepository = accountCardRepository;
+        _creditCardRepository = creditCardRepository;
+        _currentCustomer = currentCustomer;
+        _transactionRepository = transactionRepository;
+        _unitOfWork = unitOfWork;
+    }
 
-        public TransactionManager(AppDbContext context)
+    public Task DepositAsync(string cardNumber, decimal amount, string description)
+    {
+        ValidateTransactionInput(cardNumber, amount, description);
+
+        return _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            _context = context;
-        }
+            var accountCard = await GetActiveAccountCardAsync(cardNumber);
+            var account = await LockActiveAccountAsync(accountCard.AccountId);
 
-        // --- YARDIMCI METOTLAR: Bakiyeyi ve Borcu Anlık Hesaplar ---
-
-        private async Task<decimal> GetAccountBalanceAsync(int accountId)
-        {
-            var transactions = await _context.Transactions
-                .Where(t => t.AccountId == accountId)
-                .ToListAsync();
-
-            decimal balance = 0;
-            foreach (var t in transactions)
+            await _transactionRepository.AddAsync(new Transaction
             {
-                if (t.TransactionTypeId == 1) // 1: Para Yatırma
-                    balance += t.Amount;
-                else if (t.TransactionTypeId == 2 || t.TransactionTypeId == 4) // 2: Çekme, 4: Kredi Kartına Transfer
-                    balance -= t.Amount;
-            }
-            return balance;
-        }
-
-        private async Task<decimal> GetCreditCardDebtAsync(int creditCardId)
-        {
-            var transactions = await _context.Transactions
-                .Where(t => t.CreditCardId == creditCardId)
-                .ToListAsync();
-
-            decimal debt = 0;
-            foreach (var t in transactions)
-            {
-                if (t.TransactionTypeId == 3) // 3: Kredi Kartı Harcaması
-                    debt += t.Amount;
-                else if (t.TransactionTypeId == 4) // 4: Kredi Kartına Ödeme (Transfer)
-                    debt -= t.Amount;
-            }
-            return debt;
-        }
-
-        // --- SERVİS METOTLARI ---
-
-        public async Task DepositAsync(string cardNumber, decimal amount, string description)
-        {
-            var accountCard = await _context.AccountCards.FirstOrDefaultAsync(c => c.CardNumber == cardNumber);
-            if (accountCard == null) throw new Exception("Account card not found.");
-            if (amount <= 0) throw new Exception("Amount must be greater than zero.");
-
-            var transaction = new Transaction
-            {
-                AccountId = accountCard.AccountId,
+                AccountId = account.Id,
                 Amount = amount,
-                Description = description,
-                TransactionTypeId = 1 // Para Yatırma ID'si
-            };
+                Description = description.Trim(),
+                TransactionTypeId = TransactionTypeIds.Deposit
+            });
+        });
+    }
 
-            await _context.Transactions.AddAsync(transaction);
-            await _context.SaveChangesAsync();
-        }
+    public Task WithdrawAsync(string cardNumber, decimal amount, string description)
+    {
+        ValidateTransactionInput(cardNumber, amount, description);
 
-        public async Task WithdrawAsync(string cardNumber, decimal amount, string description)
+        return _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            var accountCard = await _context.AccountCards.FirstOrDefaultAsync(c => c.CardNumber == cardNumber);
-            if (accountCard == null) throw new Exception("Account card not found.");
-            if (amount <= 0) throw new Exception("Amount must be greater than zero.");
+            var accountCard = await GetActiveAccountCardAsync(cardNumber);
+            var account = await LockActiveAccountAsync(accountCard.AccountId);
+            var currentBalance = await _transactionRepository.GetAccountBalanceAsync(account.Id);
 
-            // Anlık Bakiye Kontrolü
-            decimal currentBalance = await GetAccountBalanceAsync(accountCard.AccountId);
-            if (currentBalance < amount) throw new Exception("Insufficient balance.");
-
-            var transaction = new Transaction
+            if (currentBalance < amount)
             {
-                AccountId = accountCard.AccountId,
+                throw new DomainValidationException("Yetersiz bakiye.");
+            }
+
+            await _transactionRepository.AddAsync(new Transaction
+            {
+                AccountId = account.Id,
                 Amount = amount,
-                Description = description,
-                TransactionTypeId = 2 // Para Çekme ID'si
-            };
+                Description = description.Trim(),
+                TransactionTypeId = TransactionTypeIds.Withdrawal
+            });
+        });
+    }
 
-            await _context.Transactions.AddAsync(transaction);
-            await _context.SaveChangesAsync();
-        }
+    public Task PurchaseAsync(string creditCardNumber, decimal amount, string description)
+    {
+        ValidateTransactionInput(creditCardNumber, amount, description);
 
-        public async Task PurchaseAsync(string creditCardNumber, decimal amount, string description)
+        return _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            var creditCard = await _context.CreditCards.FirstOrDefaultAsync(c => c.CardNumber == creditCardNumber);
-            if (creditCard == null) throw new Exception("Credit card not found.");
-            if (amount <= 0) throw new Exception("Amount must be greater than zero.");
+            var creditCard = await _creditCardRepository.GetActiveByCardNumberForUpdateAsync(
+                creditCardNumber,
+                _currentCustomer.CustomerId);
 
-            // Anlık Borç ve Limit Kontrolü
-            decimal currentDebt = await GetCreditCardDebtAsync(creditCard.Id);
-            if (creditCard.CardLimit - currentDebt < amount) throw new Exception("Insufficient credit limit.");
+            if (creditCard is null)
+            {
+                throw new EntityNotFoundException("Aktif kredi kartı bulunamadı.");
+            }
 
-            var transaction = new Transaction
+            var currentDebt = await _transactionRepository.GetCreditCardDebtAsync(creditCard.Id);
+            if (creditCard.CardLimit - currentDebt < amount)
+            {
+                throw new DomainValidationException("Yetersiz kredi kartı limiti.");
+            }
+
+            await _transactionRepository.AddAsync(new Transaction
             {
                 CreditCardId = creditCard.Id,
                 Amount = amount,
-                Description = description,
-                TransactionTypeId = 3 // Kredi Kartı Harcama ID'si
-            };
+                Description = description.Trim(),
+                TransactionTypeId = TransactionTypeIds.Purchase
+            });
+        });
+    }
 
-            await _context.Transactions.AddAsync(transaction);
-            await _context.SaveChangesAsync();
+    public Task TransferToCreditCardAsync(
+        string accountCardNumber,
+        string creditCardNumber,
+        decimal amount,
+        string description)
+    {
+        ValidateTransactionInput(accountCardNumber, amount, description);
+
+        if (string.IsNullOrWhiteSpace(creditCardNumber))
+        {
+            throw new DomainValidationException("Kredi kartı numarası zorunludur.");
         }
 
-        // --- GÜNCELLENEN METOT BURASI ---
-        public async Task TransferToCreditCardAsync(string accountCardNumber, string creditCardNumber, decimal amount, string description)
+        return _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            // 1. Önce Swagger'dan gelen kart numarası ile AccountCard'ı buluyoruz
-            var accountCard = await _context.AccountCards.FirstOrDefaultAsync(c => c.CardNumber == accountCardNumber);
-            if (accountCard == null) throw new Exception("Account card not found.");
+            var accountCard = await GetActiveAccountCardAsync(accountCardNumber);
+            var account = await LockActiveAccountAsync(accountCard.AccountId);
+            var creditCard = await _creditCardRepository.GetActiveByCardNumberForUpdateAsync(
+                creditCardNumber,
+                _currentCustomer.CustomerId);
 
-            // 2. Bulduğumuz kartın bağlı olduğu asıl hesabı (Account) buluyoruz
-            var account = await _context.Accounts.FirstOrDefaultAsync(a => a.Id == accountCard.AccountId);
-            if (account == null) throw new Exception("Account not found.");
+            if (creditCard is null)
+            {
+                throw new EntityNotFoundException("Aktif kredi kartı bulunamadı.");
+            }
 
-            // Kredi kartını buluyoruz
-            var creditCard = await _context.CreditCards.FirstOrDefaultAsync(c => c.CardNumber == creditCardNumber);
-            if (creditCard == null) throw new Exception("Credit card not found.");
+            var currentBalance = await _transactionRepository.GetAccountBalanceAsync(account.Id);
+            if (currentBalance < amount)
+            {
+                throw new DomainValidationException("Yetersiz hesap bakiyesi.");
+            }
 
-            if (amount <= 0) throw new Exception("Amount must be greater than zero.");
-
-            // Anlık Bakiye Kontrolü (Bulduğumuz asıl hesabın bakiyesini kontrol ediyoruz)
-            decimal currentBalance = await GetAccountBalanceAsync(account.Id);
-            if (currentBalance < amount) throw new Exception("Insufficient account balance.");
-
-            var transaction = new Transaction
+            await _transactionRepository.AddAsync(new Transaction
             {
                 AccountId = account.Id,
                 CreditCardId = creditCard.Id,
                 Amount = amount,
-                Description = description,
-                TransactionTypeId = 4 // Kredi Kartına Transfer/Ödeme ID'si
-            };
+                Description = description.Trim(),
+                TransactionTypeId = TransactionTypeIds.CreditCardPayment
+            });
+        });
+    }
 
-            await _context.Transactions.AddAsync(transaction);
-            await _context.SaveChangesAsync();
+    public Task<List<Transaction>> GetAllTransactionsAsync()
+    {
+        return _transactionRepository.GetAllWithDetailsAsync(_currentCustomer.CustomerId);
+    }
+
+    public Transaction? GetTransactionById(int id)
+    {
+        return _transactionRepository.GetByIdWithDetails(id, _currentCustomer.CustomerId);
+    }
+
+    private async Task<AccountCard> GetActiveAccountCardAsync(string cardNumber)
+    {
+        return await _accountCardRepository.GetActiveByCardNumberAsync(
+                   cardNumber,
+                   _currentCustomer.CustomerId)
+               ?? throw new EntityNotFoundException("Aktif banka kartı bulunamadı.");
+    }
+
+    private async Task<Account> LockActiveAccountAsync(int accountId)
+    {
+        var account = await _accountRepository.GetByIdForUpdateAsync(
+            accountId,
+            _currentCustomer.CustomerId);
+
+        if (account is null || !account.IsActive)
+        {
+            throw new EntityNotFoundException("Aktif hesap bulunamadı.");
         }
 
-        public async Task<List<Transaction>> GetAllTransactionsAsync()
+        return account;
+    }
+
+    private static void ValidateTransactionInput(
+        string cardNumber,
+        decimal amount,
+        string description)
+    {
+        if (string.IsNullOrWhiteSpace(cardNumber))
         {
-            return await _context.Transactions
-                .Include(t => t.Account)
-                .Include(t => t.CreditCard)
-                .Include(t => t.TransactionType)
-                .ToListAsync();
+            throw new DomainValidationException("Kart numarası zorunludur.");
         }
 
-        public Transaction GetTransactionById(int id)
+        if (amount <= 0)
         {
-            return _context.Transactions
-                .Include(t => t.Account)
-                .Include(t => t.CreditCard)
-                .Include(t => t.TransactionType)
-                .FirstOrDefault(t => t.Id == id)!;
+            throw new DomainValidationException("Tutar sıfırdan büyük olmalıdır.");
+        }
+
+        if (string.IsNullOrWhiteSpace(description) || description.Trim().Length > 100)
+        {
+            throw new DomainValidationException("Açıklama zorunludur ve en fazla 100 karakter olabilir.");
         }
     }
 }

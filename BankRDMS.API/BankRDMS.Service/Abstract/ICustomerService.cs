@@ -1,12 +1,10 @@
-﻿using BankRDMS.Core.Entities;
-using System.Collections.Generic;
+using BankRDMS.Core.Entities;
 
-namespace BankRDMS.Service.Abstract
+namespace BankRDMS.Service.Abstract;
+
+public interface ICustomerService
 {
-    public interface ICustomerService
-    {
-        bool AddCustomerWithAccount(Customer customer);
-        List<Customer> GetAllCustomers();
-        Customer GetCustomerById(int id);
-    }
+    Task AddCustomerWithAccountAsync(Customer customer);
+    List<Customer> GetAllCustomers();
+    Customer? GetCustomerById(int id);
 }
