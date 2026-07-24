@@ -2,6 +2,18 @@ using BankRDMS.Core.Entities;
 
 namespace BankRDMS.API.Models.Responses;
 
+public sealed record MessageResponse(string Message);
+
+public sealed record AccountStatusResponse(string Message, int AccountId);
+
+public sealed record CustomerCreatedResponse(string Message, int CustomerId);
+
+public sealed record LoginResponse(
+    string Token,
+    DateTime ExpiresAt,
+    int CustomerId,
+    string FullName);
+
 public sealed record AccountCardResponse(
     int Id,
     int AccountId,

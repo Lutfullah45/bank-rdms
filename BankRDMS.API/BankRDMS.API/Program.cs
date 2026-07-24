@@ -137,6 +137,7 @@ builder.Services.AddSwaggerGen(options =>
         [new OpenApiSecuritySchemeReference("bearer", document)] = []
     });
     options.OperationFilter<AllowAnonymousOperationFilter>();
+    options.DocumentFilter<ApiResponseSchemaDocumentFilter>();
 });
 
 var app = builder.Build();
