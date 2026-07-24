@@ -1,68 +1,102 @@
-﻿using BankApi.Services;
+using BankApi.Services;
 using BankRDMS.Core.Entities;
-using BankRDMS.Data;
+using BankRDMS.Core.Exceptions;
+using BankRDMS.Repository.Abstract;
 using BankRDMS.Service.Abstract;
-using Microsoft.EntityFrameworkCore;
 
-namespace BankRDMS.Service.Concrete
+namespace BankRDMS.Service.Concrete;
+
+public class AccountManager : IAccountService
 {
-    public class AccountManager : IAccountService
+    private readonly IAccountRepository _accountRepository;
+    private readonly ICurrentCustomer _currentCustomer;
+    private readonly IBankingNumberGenerator _numberGenerator;
+
+    public AccountManager(
+        IAccountRepository accountRepository,
+        ICurrentCustomer currentCustomer,
+        IBankingNumberGenerator numberGenerator)
     {
-        private readonly AppDbContext _context;
+        _accountRepository = accountRepository;
+        _currentCustomer = currentCustomer;
+        _numberGenerator = numberGenerator;
+    }
 
-        public AccountManager(AppDbContext context)
+    public async Task CreateAccountAsync(int customerId, string accountName)
+    {
+        EnsureCurrentCustomer(customerId);
+
+        if (string.IsNullOrWhiteSpace(accountName) || accountName.Trim().Length is < 2 or > 50)
         {
-            _context = context;
+            throw new DomainValidationException("Hesap adı 2 ile 50 karakter arasında olmalıdır.");
         }
 
-        public async Task CreateAccountAsync(int customerId, string accountName)
+        var newAccount = new Account
         {
-            Random rnd = new Random();
+            CustomerId = customerId,
+            AccountName = accountName.Trim(),
+            IsActive = true,
+            Iban = await GenerateUniqueIbanAsync(),
+            AccountNumber = await GenerateUniqueAccountNumberAsync()
+        };
 
-            var newAccount = new Account
+        await _accountRepository.AddAsync(newAccount);
+    }
+
+    public Task<List<Account>> GetAllAccountsAsync()
+    {
+        return _accountRepository.GetAllByCustomerIdAsync(_currentCustomer.CustomerId);
+    }
+
+    public Account? GetAccountById(int id)
+    {
+        return _accountRepository.GetByIdWithCards(id, _currentCustomer.CustomerId);
+    }
+
+    public Task<List<Account>> GetAccountsByCustomerIdAsync(int customerId)
+    {
+        EnsureCurrentCustomer(customerId);
+        return _accountRepository.GetByCustomerIdAsync(customerId);
+    }
+
+    public Task<bool> UpdateAccountStatusAsync(int id, bool isActive)
+    {
+        return _accountRepository.UpdateStatusAsync(id, _currentCustomer.CustomerId, isActive);
+    }
+
+    private void EnsureCurrentCustomer(int customerId)
+    {
+        if (customerId != _currentCustomer.CustomerId)
+        {
+            throw new ForbiddenException("Başka bir müşterinin hesabında işlem yapamazsınız.");
+        }
+    }
+
+    private async Task<string> GenerateUniqueAccountNumberAsync()
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var accountNumber = _numberGenerator.GenerateAccountNumber();
+            if (!await _accountRepository.AccountNumberExistsAsync(accountNumber))
             {
-                CustomerId = customerId,
-                AccountName = accountName,
-                IsActive = true,
-                Iban = "TR" + rnd.Next(10000000, 99999999).ToString() + rnd.Next(10000000, 99999999).ToString(),
-                AccountNumber = rnd.Next(100000000, 999999999).ToString()
-            };
-
-            await _context.Accounts.AddAsync(newAccount);
-            await _context.SaveChangesAsync(); 
-        }
-
-        public async Task<List<Account>> GetAllAccountsAsync()
-        {
-            return await _context.Accounts.ToListAsync();
-        }
-
-        public Account GetAccountById(int id)
-        {
-            return _context.Accounts
-                           .Include(a => a.AccountCards)
-                           .FirstOrDefault(a => a.Id == id);
-        }
-
-        public async Task<List<Account>> GetAccountsByCustomerIdAsync(int customerId)
-        {
-            return await _context.Accounts.Where(a => a.CustomerId == customerId).ToListAsync();
-        }
-
-        public bool UpdateAccountStatus(int id, bool isActive)
-        {
-            var account = _context.Accounts.FirstOrDefault(a => a.Id == id);
-
-            if (account == null)
-            {
-                return false; 
+                return accountNumber;
             }
-
-            account.IsActive = isActive; 
-
-            _context.SaveChanges(); 
-
-            return true; 
         }
+
+        throw new ConflictException("Benzersiz hesap numarası üretilemedi. Lütfen tekrar deneyin.");
+    }
+
+    private async Task<string> GenerateUniqueIbanAsync()
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var iban = _numberGenerator.GenerateIban();
+            if (!await _accountRepository.IbanExistsAsync(iban))
+            {
+                return iban;
+            }
+        }
+
+        throw new ConflictException("Benzersiz IBAN üretilemedi. Lütfen tekrar deneyin.");
     }
 }

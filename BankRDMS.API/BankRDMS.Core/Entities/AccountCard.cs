@@ -1,4 +1,4 @@
-﻿namespace BankRDMS.Core.Entities;
+namespace BankRDMS.Core.Entities;
 
 public class AccountCard
 {

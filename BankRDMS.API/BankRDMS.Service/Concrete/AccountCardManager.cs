@@ -1,77 +1,91 @@
-﻿using BankRDMS.Core.Entities;
-using BankRDMS.Data;
+using BankRDMS.Core.Entities;
+using BankRDMS.Core.Exceptions;
+using BankRDMS.Repository.Abstract;
 using BankRDMS.Service.Abstract;
-using Microsoft.EntityFrameworkCore;
 
-namespace BankRDMS.Service.Concrete
+namespace BankRDMS.Service.Concrete;
+
+public class AccountCardManager : IAccountCardService
 {
-    public class AccountCardManager : IAccountCardService
+    private readonly IAccountRepository _accountRepository;
+    private readonly IAccountCardRepository _accountCardRepository;
+    private readonly ICreditCardRepository _creditCardRepository;
+    private readonly ICurrentCustomer _currentCustomer;
+    private readonly IBankingNumberGenerator _numberGenerator;
+
+    public AccountCardManager(
+        IAccountRepository accountRepository,
+        IAccountCardRepository accountCardRepository,
+        ICreditCardRepository creditCardRepository,
+        ICurrentCustomer currentCustomer,
+        IBankingNumberGenerator numberGenerator)
     {
-        private readonly AppDbContext _context;
+        _accountRepository = accountRepository;
+        _accountCardRepository = accountCardRepository;
+        _creditCardRepository = creditCardRepository;
+        _currentCustomer = currentCustomer;
+        _numberGenerator = numberGenerator;
+    }
 
-        public AccountCardManager(AppDbContext context)
+    public async Task CreateAccountCardAsync(int accountId)
+    {
+        var account = await _accountRepository.GetByIdAsync(accountId, _currentCustomer.CustomerId);
+        if (account is null)
         {
-            _context = context;
+            throw new EntityNotFoundException("Hesap bulunamadı.");
         }
 
-        public async Task CreateAccountCardAsync(int accountId)
+        if (!account.IsActive)
         {
-            var random = new Random();
+            throw new DomainValidationException("Pasif hesaba kart oluşturulamaz.");
+        }
 
-            // Banka kartı için rastgele 16 haneli numara üretimi
-            string cardNumber = $"4532{random.Next(1000, 9999)}{random.Next(1000, 9999)}{random.Next(1000, 9999)}";
+        var newAccountCard = new AccountCard
+        {
+            AccountId = accountId,
+            CardNumber = await GenerateUniqueCardNumberAsync(),
+            ExpirationMonthYear = DateTime.UtcNow.AddYears(3).ToString("MM/yy"),
+            Ccv = _numberGenerator.GenerateSecurityCode(),
+            IsActive = true
+        };
 
-            var existingAccount = await _context.Accounts.FindAsync(accountId);
+        await _accountCardRepository.AddAsync(newAccountCard);
+    }
 
-            if (existingAccount == null)
+    public AccountCard? GetAccountCardById(int id)
+    {
+        return _accountCardRepository.GetById(id, _currentCustomer.CustomerId);
+    }
+
+    public Task<bool> UpdateStatusAsync(int id, bool isActive)
+    {
+        return _accountCardRepository.UpdateStatusAsync(id, _currentCustomer.CustomerId, isActive);
+    }
+
+    public Task<List<AccountCard>> GetAllAccountCardsAsync()
+    {
+        return _accountCardRepository.GetAllAsync(_currentCustomer.CustomerId);
+    }
+
+    public List<AccountCard> GetAccountCardsByAccountId(int accountId)
+    {
+        return _accountCardRepository.GetByAccountId(accountId, _currentCustomer.CustomerId);
+    }
+
+    private async Task<string> GenerateUniqueCardNumberAsync()
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var cardNumber = _numberGenerator.GenerateCardNumber();
+            var existsAsAccountCard = await _accountCardRepository.CardNumberExistsAsync(cardNumber);
+            var existsAsCreditCard = await _creditCardRepository.CardNumberExistsAsync(cardNumber);
+
+            if (!existsAsAccountCard && !existsAsCreditCard)
             {
-                throw new Exception($"{accountId} ID'li hesap bulunamadığı için kart oluşturulamaz.");
-               
+                return cardNumber;
             }
-
-            var newAccountCard = new AccountCard
-            {
-                AccountId = accountId,
-                CardNumber = cardNumber,
-                ExpirationMonthYear = DateTime.Now.AddYears(3).ToString("MM/yy"),
-                Ccv = random.Next(100, 999).ToString(),
-                IsActive = true
-            };
-
-            await _context.AccountCards.AddAsync(newAccountCard);
-            await _context.SaveChangesAsync();
-        }
-        public AccountCard GetAccountCardById(int id)
-        {
-            return _context.AccountCards.FirstOrDefault(ac => ac.Id == id);
         }
 
-        public async Task<bool> UpdateStatusAsync(int id, bool isActive)
-        {
-        
-            var card = await _context.AccountCards.FindAsync(id);
-
-            if (card == null)
-            {
-                return false; 
-            }
-
-            card.IsActive = isActive;
-            _context.AccountCards.Update(card);
-            await _context.SaveChangesAsync();
-
-            return true; 
-        }
-
-        public async Task<List<AccountCard>> GetAllAccountCardsAsync()
-        {
-            return await _context.AccountCards.ToListAsync();
-        }
-        public List<AccountCard> GetAccountCardsByAccountId(int accountId)
-        {
-            return _context.AccountCards
-                           .Where(ac => ac.AccountId == accountId)
-                           .ToList();
-        }
+        throw new ConflictException("Benzersiz kart numarası üretilemedi. Lütfen tekrar deneyin.");
     }
 }

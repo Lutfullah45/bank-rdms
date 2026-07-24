@@ -1,93 +1,80 @@
-﻿using BankRDMS.Service.Abstract;
+using System.ComponentModel.DataAnnotations;
+using BankRDMS.API.Models.Responses;
+using BankRDMS.Service.Abstract;
 using Microsoft.AspNetCore.Mvc;
-using System;
-using System.Threading.Tasks;
 
-namespace BankApi.Controllers
+namespace BankApi.Controllers;
+
+[Route("api/[controller]")]
+[ApiController]
+public class TransactionController : ControllerBase
 {
-    [Route("api/[controller]")]
-    [ApiController]
-    public class TransactionController : ControllerBase
+    private readonly ITransactionService _transactionService;
+
+    public TransactionController(ITransactionService transactionService)
     {
-        private readonly ITransactionService _transactionService;
+        _transactionService = transactionService;
+    }
 
-        public TransactionController(ITransactionService transactionService)
-        {
-            _transactionService = transactionService;
-        }
+    [HttpPost("deposit")]
+    public async Task<IActionResult> Deposit(
+        [FromQuery, Required, StringLength(16, MinimumLength = 16)] string cardNumber,
+        [FromQuery, Range(typeof(decimal), "0.01", "100000000")] decimal amount,
+        [FromQuery, Required, StringLength(100)] string description)
+    {
+        await _transactionService.DepositAsync(cardNumber, amount, description);
+        return Ok("Para yatırma işlemi başarıyla tamamlandı.");
+    }
 
-        [HttpPost("deposit")]
-        public async Task<IActionResult> Deposit([FromQuery] string cardNumber, [FromQuery] decimal amount, [FromQuery] string description)
-        {
-            try
-            {
-                await _transactionService.DepositAsync(cardNumber, amount, description);
-                return Ok("Deposit transaction completed successfully.");
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(ex.Message);
-            }
-        }
+    [HttpPost("withdraw")]
+    public async Task<IActionResult> Withdraw(
+        [FromQuery, Required, StringLength(16, MinimumLength = 16)] string cardNumber,
+        [FromQuery, Range(typeof(decimal), "0.01", "100000000")] decimal amount,
+        [FromQuery, Required, StringLength(100)] string description)
+    {
+        await _transactionService.WithdrawAsync(cardNumber, amount, description);
+        return Ok("Para çekme işlemi başarıyla tamamlandı.");
+    }
 
-        [HttpPost("withdraw")]
-        public async Task<IActionResult> Withdraw([FromQuery] string cardNumber, [FromQuery] decimal amount, [FromQuery] string description)
-        {
-            try
-            {
-                await _transactionService.WithdrawAsync(cardNumber, amount, description);
-                return Ok("Withdraw transaction completed successfully.");
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(ex.Message);
-            }
-        }
+    [HttpPost("purchase")]
+    public async Task<IActionResult> Purchase(
+        [FromQuery, Required, StringLength(16, MinimumLength = 16)] string creditCardNumber,
+        [FromQuery, Range(typeof(decimal), "0.01", "100000000")] decimal amount,
+        [FromQuery, Required, StringLength(100)] string description)
+    {
+        await _transactionService.PurchaseAsync(creditCardNumber, amount, description);
+        return Ok("Harcama işlemi başarıyla tamamlandı.");
+    }
 
-        [HttpPost("purchase")]
-        public async Task<IActionResult> Purchase([FromQuery] string creditCardNumber, [FromQuery] decimal amount, [FromQuery] string description)
-        {
-            try
-            {
-                await _transactionService.PurchaseAsync(creditCardNumber, amount, description);
-                return Ok("Purchase transaction completed successfully.");
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(ex.Message);
-            }
-        }
+    [HttpPost("transfer-to-credit-card")]
+    public async Task<IActionResult> TransferToCreditCard(
+        [FromQuery, Required, StringLength(16, MinimumLength = 16)] string accountCardNumber,
+        [FromQuery, Required, StringLength(16, MinimumLength = 16)] string creditCardNumber,
+        [FromQuery, Range(typeof(decimal), "0.01", "100000000")] decimal amount,
+        [FromQuery, Required, StringLength(100)] string description)
+    {
+        await _transactionService.TransferToCreditCardAsync(
+            accountCardNumber,
+            creditCardNumber,
+            amount,
+            description);
+        return Ok("Kredi kartı ödeme işlemi başarıyla tamamlandı.");
+    }
 
-        [HttpPost("transfer-to-credit-card")]
-        public async Task<IActionResult> TransferToCreditCard([FromQuery] string accountCardNumber, [FromQuery] string creditCardNumber, [FromQuery] decimal amount, [FromQuery] string description)
-        {
-            try
-            {
-                await _transactionService.TransferToCreditCardAsync(accountCardNumber, creditCardNumber, amount, description);
-                return Ok("Transfer to credit card completed successfully.");
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(ex.Message);
-            }
-        }
+    [HttpGet("getall")]
+    public async Task<IActionResult> GetAllTransactions()
+    {
+        var result = (await _transactionService.GetAllTransactionsAsync())
+            .Select(TransactionResponse.FromEntity);
+        return Ok(result);
+    }
 
-        [HttpGet("getall")]
-        public async Task<IActionResult> GetAllTransactions()
-        {
-            var result = await _transactionService.GetAllTransactionsAsync();
-            return Ok(result);
-        }
-
-        [HttpGet("getbyid/{id}")]
-        public IActionResult GetById(int id)
-        {
-            var transaction = _transactionService.GetTransactionById(id);
-            if (transaction == null)
-            {
-                return NotFound("Transaction not found for the given ID.");
-            }
-            return Ok(transaction);
-        }
+    [HttpGet("getbyid/{id:int}")]
+    public IActionResult GetById(int id)
+    {
+        var transaction = _transactionService.GetTransactionById(id);
+        return transaction is null
+            ? NotFound("İşlem bulunamadı.")
+            : Ok(TransactionResponse.FromEntity(transaction));
     }
 }

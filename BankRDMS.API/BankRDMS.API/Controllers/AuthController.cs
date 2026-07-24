@@ -1,74 +1,85 @@
-﻿using System;
 using System.IdentityModel.Tokens.Jwt;
-using System.Linq;
 using System.Security.Claims;
 using System.Text;
-using BankRDMS.Data;
+using BankRDMS.API.Models.Requests;
+using BankRDMS.Core.Entities;
+using BankRDMS.Service.Abstract;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 
-namespace BankRDMS.API.Controllers
+namespace BankRDMS.API.Controllers;
+
+[Route("api/[controller]")]
+[ApiController]
+public class AuthController : ControllerBase
 {
-    [Route("api/[controller]")]
-    [ApiController]
-    public class AuthController : ControllerBase
+    private readonly IAuthService _authService;
+    private readonly IConfiguration _configuration;
+
+    public AuthController(IAuthService authService, IConfiguration configuration)
     {
-        private readonly IConfiguration _configuration;
-        private readonly AppDbContext _context; 
+        _authService = authService;
+        _configuration = configuration;
+    }
 
-        public AuthController(IConfiguration configuration, AppDbContext context)
+    [AllowAnonymous]
+    [EnableRateLimiting("login")]
+    [HttpPost("login")]
+    public async Task<IActionResult> Login([FromBody] LoginRequest request)
+    {
+        var customer = await _authService.AuthenticateAsync(
+            request.IdentityNumber,
+            request.BirthDate);
+
+        if (customer is null)
         {
-            _configuration = configuration;
-            _context = context;
+            return Unauthorized(new { Message = "Kimlik numarası veya doğum tarihi hatalı." });
         }
 
-        [HttpPost("login")]
-        public IActionResult Login(string identityNumber, DateTime birthDate)
+        var expiresAt = DateTime.UtcNow.AddMinutes(30);
+        var token = GenerateToken(customer, expiresAt);
+
+        return Ok(new
         {
-            
-            var customer = _context.Customers.FirstOrDefault(c =>
-                c.IdentityNumber == identityNumber &&
-                c.BirthDate.Date == birthDate.Date);
+            Token = token,
+            ExpiresAt = expiresAt,
+            CustomerId = customer.Id,
+            FullName = customer.FullName
+        });
+    }
 
-            if (customer == null)
-            {
-                return Unauthorized(new { Message = "Hatalı TC Kimlik No veya Doğum Tarihi." });
-            }
+    private string GenerateToken(Customer customer, DateTime expiresAt)
+    {
+        var key = _configuration["Jwt:Key"]
+                  ?? throw new InvalidOperationException("JWT anahtarı yapılandırılmamış.");
+        var issuer = _configuration["Jwt:Issuer"]
+                     ?? throw new InvalidOperationException("JWT issuer yapılandırılmamış.");
+        var audience = _configuration["Jwt:Audience"]
+                       ?? throw new InvalidOperationException("JWT audience yapılandırılmamış.");
 
-           
-            var token = GenerateToken(customer.IdentityNumber, customer.Id.ToString(), customer.FullName);
+        var credentials = new SigningCredentials(
+            new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
+            SecurityAlgorithms.HmacSha256);
 
-            return Ok(new
-            {
-                Token = token,
-                Message = "Giriş Başarılı!",
-                CustomerId = customer.Id,
-                FullName = customer.FullName
-            });
-        }
-
-        private string GenerateToken(string identityNumber, string customerId, string fullName)
+        var claims = new[]
         {
-            var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]));
-            var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+            new Claim(JwtRegisteredClaimNames.Sub, customer.Id.ToString()),
+            new Claim(ClaimTypes.NameIdentifier, customer.Id.ToString()),
+            new Claim("customer_id", customer.Id.ToString()),
+            new Claim(ClaimTypes.Name, customer.FullName),
+            new Claim(ClaimTypes.Role, "Customer"),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
 
-            // Token içerisine gömülecek kimlik bilgileri (Claims)
-            var claims = new[]
-            {
-                new Claim(JwtRegisteredClaimNames.Sub, customerId),             // Kullanıcı ID'si
-                new Claim(ClaimTypes.Name, fullName),                           // Müşteri Adı Soyadı
-                new Claim("IdentityNumber", identityNumber),                    // TC Kimlik No
-                new Claim(ClaimTypes.Role, "Customer")                          // Rol tanımlaması
-            };
+        var token = new JwtSecurityToken(
+            issuer,
+            audience,
+            claims,
+            expires: expiresAt,
+            signingCredentials: credentials);
 
-            var token = new JwtSecurityToken(
-                issuer: _configuration["Jwt:Issuer"],
-                audience: _configuration["Jwt:Audience"],
-                claims: claims,
-                expires: DateTime.Now.AddHours(2), // Token 2 saat geçerli
-                signingCredentials: credentials);
-
-            return new JwtSecurityTokenHandler().WriteToken(token);
-        }
+        return new JwtSecurityTokenHandler().WriteToken(token);
     }
 }

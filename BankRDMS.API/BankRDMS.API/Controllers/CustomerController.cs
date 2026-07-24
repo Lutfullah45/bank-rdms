@@ -1,124 +1,64 @@
-﻿using BankRDMS.Core.Entities;
+using BankRDMS.API.Models.Requests;
+using BankRDMS.API.Models.Responses;
+using BankRDMS.Core.Entities;
 using BankRDMS.Service.Abstract;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System;
-using System.Collections.Generic;
+using Microsoft.AspNetCore.RateLimiting;
 
-namespace BankRDMS.API.Controllers
+namespace BankRDMS.API.Controllers;
+
+[Route("api/[controller]")]
+[ApiController]
+public class CustomerController : ControllerBase
 {
-    [Route("api/[controller]")]
-    [ApiController]
-    public class CustomerController : ControllerBase
+    private readonly ICustomerService _customerService;
+
+    public CustomerController(ICustomerService customerService)
     {
-        private readonly ICustomerService _customerService;
+        _customerService = customerService;
+    }
 
-        public CustomerController(ICustomerService customerService)
+    [AllowAnonymous]
+    [EnableRateLimiting("registration")]
+    [HttpPost("create")]
+    public async Task<IActionResult> CreateCustomer([FromBody] CreateCustomerRequest request)
+    {
+        var customer = new Customer
         {
-            _customerService = customerService;
-        }
+            FullName = request.FullName,
+            IdentityNumber = request.IdentityNumber,
+            BirthPlace = request.BirthPlace,
+            BirthDate = request.BirthDate
+        };
 
-        [HttpPost("create")]
-        public IActionResult CreateCustomer([FromBody] Customer customer)
+        await _customerService.AddCustomerWithAccountAsync(customer);
+
+        return Ok(new
         {
-          
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
+            Message = "Müşteri, vadesiz hesap ve banka kartı başarıyla oluşturuldu.",
+            CustomerId = customer.Id
+        });
+    }
 
-         
-            if (customer.Accounts == null || customer.Accounts.Count == 0)
-            {
-                customer.Accounts = new List<Account>
-                {
-                    new Account
-                    {
-                        AccountName = "Vadesiz Hesap",
-                        AccountNumber = GenerateAccountNumber(),
-                        Iban = GenerateIban(),
-                        IsActive = true,
-                        CreatedAt = DateTime.UtcNow, 
-                        
-                        // YENİ EKLENEN KISIM: Vadesiz hesaba bağlı banka kartı oluşturuluyor
-                        AccountCards = new List<AccountCard>
-                        {
-                            new AccountCard
-                            {
-                                CardNumber = GenerateCardNumber(),
-                                Ccv = GenerateCvv(),
-                                ExpirationMonthYear = DateTime.UtcNow.AddYears(5).ToString("MM/yy"), // Kart süresi 5 yıl
-                                IsActive = true,
-                                CreatedAt = DateTime.UtcNow
-                            }
-                        }
-                    }
-                };
-            }
+    [HttpGet("getall")]
+    public IActionResult GetAllCustomers()
+    {
+        var customers = _customerService.GetAllCustomers()
+            .Select(CustomerResponse.FromEntity)
+            .ToList();
 
-            // Servis üzerinden müşteri, hesap ve kart oluşturma işlemini çağır
-            var result = _customerService.AddCustomerWithAccount(customer);
+        return customers.Count == 0
+            ? NotFound(new { Message = "Müşteri bulunamadı." })
+            : Ok(customers);
+    }
 
-            // Sonuca göre HTTP 200 (Ok) veya HTTP 400 (BadRequest) dön
-            if (result)
-            {
-                return Ok(new { Message = "Müşteri, ilişkili vadesiz hesap ve banka kartı başarıyla oluşturuldu." });
-            }
-
-            return BadRequest(new { Message = "Müşteri oluşturulurken veritabanı aşamasında bir hata meydana geldi." });
-        }
-
-        [HttpGet("getall")]
-        public IActionResult GetAllCustomers()
-        {
-            var customers = _customerService.GetAllCustomers();
-
-            if (customers == null || customers.Count == 0)
-            {
-                return NotFound(new { Message = "Sistemde henüz kayıtlı müşteri bulunmamaktadır." });
-            }
-
-            return Ok(customers);
-        }
-
-        [HttpGet("getbyid/{id}")]
-        public IActionResult GetById(int id)
-        {
-            var customer = _customerService.GetCustomerById(id);
-            if (customer == null)
-            {
-                return NotFound("Belirtilen ID'ye ait müşteri bulunamadı.");
-            }
-            return Ok(customer);
-        }
-
-        // --- YARDIMCI METOTLAR ---
-        // Sınıfın içinde, ancak dışarıdan erişime kapalı (private) olacak şekilde tanımlandılar.
-
-        private string GenerateAccountNumber()
-        {
-            Random rnd = new Random();
-            return rnd.Next(10000000, 99999999).ToString();
-        }
-
-        private string GenerateIban()
-        {
-            // Basit bir IBAN simülasyonu
-            return "TR" + GenerateAccountNumber() + GenerateAccountNumber() + "0000";
-        }
-
-        private string GenerateCardNumber()
-        {
-            Random rnd = new Random();
-            // Örnek bir BIN numarası (ilk 8 hane) ile başlatıp son 8 haneyi rastgele üretiyoruz.
-            string firstPart = "40001234";
-            string secondPart = rnd.Next(10000000, 99999999).ToString();
-            return firstPart + secondPart;
-        }
-
-        private string GenerateCvv()
-        {
-            Random rnd = new Random();
-            return rnd.Next(100, 999).ToString();
-        }
+    [HttpGet("getbyid/{id:int}")]
+    public IActionResult GetById(int id)
+    {
+        var customer = _customerService.GetCustomerById(id);
+        return customer is null
+            ? NotFound("Müşteri bulunamadı.")
+            : Ok(CustomerResponse.FromEntity(customer));
     }
 }

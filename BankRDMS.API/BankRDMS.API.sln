@@ -11,6 +11,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BankRDMS.Data", "BankRDMS.D
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BankRDMS.Service", "BankRDMS.Service\BankRDMS.Service.csproj", "{CD014139-3F72-4046-B20C-3928EEB4F425}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BankRDMS.Repository", "BankRDMS.Repository\BankRDMS.Repository.csproj", "{8B2F8E7C-BA46-485F-92DF-095E96449D8C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BankRDMS.Tests", "BankRDMS.Tests\BankRDMS.Tests.csproj", "{F1398E55-221A-4F25-9521-DC1D0A86AB52}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,6 +37,14 @@ Global
 		{CD014139-3F72-4046-B20C-3928EEB4F425}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{CD014139-3F72-4046-B20C-3928EEB4F425}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{CD014139-3F72-4046-B20C-3928EEB4F425}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8B2F8E7C-BA46-485F-92DF-095E96449D8C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8B2F8E7C-BA46-485F-92DF-095E96449D8C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8B2F8E7C-BA46-485F-92DF-095E96449D8C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8B2F8E7C-BA46-485F-92DF-095E96449D8C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F1398E55-221A-4F25-9521-DC1D0A86AB52}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F1398E55-221A-4F25-9521-DC1D0A86AB52}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F1398E55-221A-4F25-9521-DC1D0A86AB52}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F1398E55-221A-4F25-9521-DC1D0A86AB52}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
